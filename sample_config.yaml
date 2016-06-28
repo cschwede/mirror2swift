@@ -1,0 +1,8 @@
+first:
+  mirrors:
+  - name: base
+    url: 'http://mirror.eu.oneandone.net/linux/distributions/centos/7/os/x86_64/'
+    prefix: 'base/'
+  swift:
+    url: 'http://127.0.0.1:8080/v1/AUTH_tester/repomirror/'
+    key: 'secret'
