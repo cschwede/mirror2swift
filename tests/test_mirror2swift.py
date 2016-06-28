@@ -11,9 +11,11 @@ class TestMirror2Swift(unittest.TestCase):
 
     @patch('requests.get')
     def test_get_uri_list(self, mock_get):
+        html = """<a href="?C=N;O=D">Name</a>
+                  <a href="../">../</a>
+                  <a href="pkgs/">pkgs/</a>"""
         content = [
-            MagicMock(
-                content='<a href="../">../</a><a href="pkgs/">pkgs/</a>'),
+            MagicMock(content=html),
             MagicMock(content='<a href="sample%2B.rpm">sample+.rpm</a>')]
         mock_get.side_effect = content
         uris = mirror2swift.get_uri_list('http://some/url/')

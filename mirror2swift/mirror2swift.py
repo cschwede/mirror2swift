@@ -16,7 +16,7 @@ def get_uri_list(base_url, suffix=""):
     dom = lxml.html.fromstring(resp.content)
     uri_list = []
     for uri in dom.xpath('//a/@href'):
-        if uri.startswith('../'):
+        if uri.startswith('../') or uri.startswith('?'):
             continue
         uri = suffix + uri
         if uri.endswith('/'):
