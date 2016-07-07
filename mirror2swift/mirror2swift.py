@@ -9,9 +9,11 @@ import time
 import urllib
 import urlparse
 import yaml
+import gzip
+import StringIO
 
 
-def get_uri_list(base_url, suffix=""):
+def get_weblisting_uri_list(base_url, suffix=""):
     resp = requests.get(base_url + suffix)
     dom = lxml.html.fromstring(resp.content)
     uri_list = []
@@ -20,9 +22,35 @@ def get_uri_list(base_url, suffix=""):
             continue
         uri = suffix + uri
         if uri.endswith('/'):
-            uri_list += get_uri_list(base_url, uri)
+            uri_list += get_weblisting_uri_list(base_url, uri)
         else:
             uri_list.append(urllib.unquote_plus(uri))
+    return uri_list
+
+
+def get_repodata_uri_list(base_url):
+    uri_list = ["repodata/repomd.xml"]
+    repomd_url = "%s%s" % (base_url, uri_list[0])
+
+    # Get repomod.xml
+    resp = requests.get(repomd_url)
+    dom = lxml.html.fromstring(resp.content)
+    filelist = None
+    for uri in dom.xpath('//location/@href'):
+        uri_list.append(uri)
+
+    # Get primary.xml.gz
+    filelist = filter(lambda x: x.endswith("primary.xml.gz"), uri_list)
+    if len(filelist) != 1:
+        raise RuntimeError("Couldn't find filelist in %s (%s)" % (
+                            repomd_url, uri_list))
+    resp = requests.get("%s%s" % (base_url, filelist[0]))
+    filelist = gzip.GzipFile(fileobj=StringIO.StringIO(resp.content)).read()
+
+    # Extract packages list
+    dom = lxml.html.fromstring(filelist)
+    for uri in dom.xpath('//location/@href'):
+        uri_list.append(uri)
     return uri_list
 
 
@@ -95,7 +123,15 @@ def main():
         for mirror in entry.get('mirrors'):
             prefix = mirror.get('prefix', '')
             mirror_url = mirror.get('url')
-            uris += get_uri_list(mirror_url)
+            mirror_type = mirror.get('type')
+
+            if mirror_url[-1] != '/':
+                mirror_url = "%s/" % mirror_url
+
+            if mirror_type == 'repodata':
+                uris += get_repodata_uri_list(mirror_url)
+            else:
+                uris += get_weblisting_uri_list(mirror_url)
 
             objs = []
             for obj in get_container_list(swift_url, prefix):

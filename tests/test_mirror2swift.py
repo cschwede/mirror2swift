@@ -18,7 +18,7 @@ class TestMirror2Swift(unittest.TestCase):
             MagicMock(content=html),
             MagicMock(content='<a href="sample%2B.rpm">sample+.rpm</a>')]
         mock_get.side_effect = content
-        uris = mirror2swift.get_uri_list('http://some/url/')
+        uris = mirror2swift.get_weblisting_uri_list('http://some/url/')
         mock_get.assert_has_calls(
             [call('http://some/url/'), call('http://some/url/pkgs/')])
         self.assertEqual(['pkgs/sample+.rpm'], uris)
