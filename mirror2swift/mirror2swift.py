@@ -9,9 +9,12 @@ import time
 import urllib
 import urlparse
 import yaml
+import gzip
+import StringIO
+import logging as log
 
 
-def get_uri_list(base_url, suffix=""):
+def get_weblisting_uri_list(base_url, suffix=""):
     resp = requests.get(base_url + suffix)
     dom = lxml.html.fromstring(resp.content)
     uri_list = []
@@ -20,9 +23,36 @@ def get_uri_list(base_url, suffix=""):
             continue
         uri = suffix + uri
         if uri.endswith('/'):
-            uri_list += get_uri_list(base_url, uri)
+            uri_list += get_weblisting_uri_list(base_url, uri)
         else:
             uri_list.append(urllib.unquote_plus(uri))
+    return uri_list
+
+
+def get_repodata_uri_list(base_url):
+    uri_list = ["repodata/repomd.xml"]
+    repomd_url = "%s%s" % (base_url, uri_list[0])
+
+    log.debug("Discovering %s" % repomd_url)
+    resp = requests.get(repomd_url)
+    dom = lxml.html.fromstring(resp.content)
+    filelist = None
+    for uri in dom.xpath('//location/@href'):
+        uri_list.append(uri)
+
+    filelist = filter(lambda x: x.endswith("primary.xml.gz"), uri_list)
+    if len(filelist) != 1:
+        raise RuntimeError("Couldn't find filelist in %s (%s)" % (
+                            repomd_url, uri_list))
+    log.debug("Getting package list: %s%s" % (base_url, filelist[0]))
+    resp = requests.get("%s%s" % (base_url, filelist[0]))
+    filelist = gzip.GzipFile(fileobj=StringIO.StringIO(resp.content)).read()
+
+    # Extract packages list
+    log.debug("Adding all primary packages location")
+    dom = lxml.html.fromstring(filelist)
+    for uri in dom.xpath('//location/@href'):
+        uri_list.append(uri)
     return uri_list
 
 
@@ -30,6 +60,7 @@ def get_container_list(url, prefix=None):
     url += "?format=json"
     if prefix:
         url += "&prefix=%s" % prefix
+    log.debug("Listing swift container %s" % url)
     resp = requests.get(url)
     return [o.get('name') for o in resp.json()]
 
@@ -55,16 +86,19 @@ def upload_missing(download_url, swift_url, swift_key, update=False):
         swift_resp = requests.head(swift_url)
         if (mirror_resp.headers.get('Content-Length') ==
                 swift_resp.headers.get('Content-Length')):
+            log.debug("%s: already cached" % download_url)
             return True
     parsed = urlparse.urlparse(swift_url)
     resp = requests.get(download_url, stream=True)
     if resp.ok:
+        log.debug("%s: caching to %s" % (download_url, swift_url))
         sig, expires = get_tempurl(parsed.path, swift_key)
         tempurl = "%s?temp_url_sig=%s&temp_url_expires=%s" % (
             swift_url, sig, expires)
         r = requests.put(tempurl, data=resp.content)
         return r.ok
     else:
+        log.error("%s: get failed (%s)" % (download_url, str(resp)))
         return False
 
 
@@ -76,8 +110,15 @@ def get_config(filename):
             raise exc
 
 
+def setup_log(args):
+    lvl = log.DEBUG if args.debug else log.INFO
+    log.basicConfig(format='*** %(levelname)s:\t%(message)s\033[m', level=lvl)
+    log.getLogger("requests").setLevel(log.WARNING)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Process some integers.')
+    parser.add_argument("--debug", action="store_const", const=True)
     parser.add_argument('filename', help="YAML config file")
     parser.add_argument(
         '--noop', action='store_true', help="Noop - only compare mirrors")
@@ -86,6 +127,7 @@ def main():
         but differ in size. Objects are skipped by default if they exist")
 
     args = parser.parse_args()
+    setup_log(args)
     config = get_config(args.filename)
     for name, entry in config.items():
         uris = []
@@ -95,7 +137,17 @@ def main():
         for mirror in entry.get('mirrors'):
             prefix = mirror.get('prefix', '')
             mirror_url = mirror.get('url')
-            uris += get_uri_list(mirror_url)
+            mirror_type = mirror.get('type')
+
+            if mirror_url[-1] != '/':
+                mirror_url = "%s/" % mirror_url
+
+            if mirror_type == 'repodata':
+                log.info("Getting repodata_uri_list %s" % mirror_url)
+                uris += get_repodata_uri_list(mirror_url)
+            else:
+                log.info("Getting weblisting_uri_list %s" % mirror_url)
+                uris += get_weblisting_uri_list(mirror_url)
 
             objs = []
             for obj in get_container_list(swift_url, prefix):
@@ -106,9 +158,10 @@ def main():
             else:
                 missing = get_missing(uris, objs)
             if not missing:
+                log.info("%s: is up-to-date (%s)" % (name, swift_url))
                 continue
-            print "Uploading %d missing files for mirror %s\n" % (
-                len(missing), name)
+            log.info("Uploading %d missing files for mirror %s (%s)\n" % (
+                     len(missing), name, swift_url))
             for m in missing:
                 print m + "...",
                 if args.noop:
