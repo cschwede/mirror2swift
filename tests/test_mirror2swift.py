@@ -1,3 +1,5 @@
+import gzip
+import cStringIO
 import tempfile
 import unittest
 
@@ -22,6 +24,54 @@ class TestMirror2Swift(unittest.TestCase):
         mock_get.assert_has_calls(
             [call('http://some/url/'), call('http://some/url/pkgs/')])
         self.assertEqual(['pkgs/sample+.rpm'], uris)
+
+    @patch('requests.get')
+    def test_get_repodata_uri_list(self, mock_get):
+        repomd = """<?xml version="1.0" encoding="UTF-8"?>
+<repomd xmlns="http://linux.duke.edu/metadata/repo" xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <revision>1467777139</revision>
+  <tags>
+    <content>binary-x86_64</content>
+  </tags>
+  <data type="primary">
+    <location href="repodata/some-primary.xml.gz"/>
+  </data>
+</repomd>"""
+
+        primary = """<package type="rpm">
+  <name>sample</name>
+  <location href="sample.rpm"/>
+</package>
+"""
+        content = [
+            MagicMock(content=repomd),
+            MagicMock(content=primary)]
+        mock_get.side_effect = content
+        uris = mirror2swift.get_repodata_uri_list('http://some/url/')
+        mock_get.assert_has_calls(
+            [call('http://some/url/repodata/repomd.xml'),
+             call('http://some/url/repodata/some-primary.xml.gz')])
+        self.assertEqual(
+            ['repodata/repomd.xml', 'repodata/some-primary.xml.gz',
+            'sample.rpm'], uris)
+
+        tmpf = cStringIO.StringIO()
+        fp = gzip.GzipFile(fileobj = tmpf, mode="wb")
+        fp.write(primary)
+        fp.close()
+        gzip_primary = tmpf.getvalue()
+
+        content = [
+            MagicMock(content=repomd),
+            MagicMock(content=gzip_primary, headers={'Content-Type': 'application/gzip'})]
+        mock_get.side_effect = content
+        uris = mirror2swift.get_repodata_uri_list('http://some/url/')
+        mock_get.assert_has_calls(
+            [call('http://some/url/repodata/repomd.xml'),
+             call('http://some/url/repodata/some-primary.xml.gz')])
+        self.assertEqual(
+            ['repodata/repomd.xml', 'repodata/some-primary.xml.gz',
+            'sample.rpm'], uris)
 
     @patch('requests.get')
     def test_get_container_list(self, mock_get):

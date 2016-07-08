@@ -52,7 +52,12 @@ def get_repodata_uri_list(base_url):
                            repomd_url, uri_list))
     log.debug("Getting package list: %s%s" % (base_url, filelist[0]))
     resp = requests.get("%s%s" % (base_url, filelist[0]))
-    filelist = gzip.GzipFile(fileobj=StringIO.StringIO(resp.content)).read()
+
+    content_type = resp.headers.get('Content-Type', '')
+    if 'gzip' in content_type:
+        filelist = gzip.GzipFile(fileobj=StringIO.StringIO(resp.content)).read()
+    else:
+        filelist = resp.content
 
     # Extract packages list
     log.debug("Adding all primary packages location")
