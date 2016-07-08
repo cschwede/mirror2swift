@@ -89,3 +89,41 @@ class TestMirror2Swift(unittest.TestCase):
         tmpfile.close()
         config = mirror2swift.get_config(tmpfile.name)
         self.assertEqual(expected_config, config)
+
+    @patch('yum.YumBase.repos')
+    def test_add_enabled_repos(self, mock_yum):
+        class DummyRepo(object):
+            def __init__(self):
+                self.id = "something"
+                self.urls = ["url"]
+        sample_config = """first:
+  mirrors:
+  - name: n
+    url: 'http://mirror/'
+    prefix: 'p/'
+  swift:
+    url: 'http://swift/'
+    key: 'secret'
+"""
+        _, fname = tempfile.mkstemp()
+        with open(fname, "wb") as fh:
+            fh.write(sample_config)
+        mock_yum.listEnabled.return_value = [DummyRepo()]
+
+        mirror2swift.add_enabled_repos(fname, section="first")
+        with open(fname) as fh:
+            returned = fh.read()
+        expected = """first:
+  mirrors:
+  - name: n
+    prefix: p/
+    url: http://mirror/
+  - name: something
+    prefix: something/
+    type: repodata
+    url: url
+  swift:
+    key: secret
+    url: http://swift/
+"""
+        self.assertEqual(expected, returned)

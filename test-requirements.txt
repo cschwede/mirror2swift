@@ -1,3 +1,4 @@
 mock
 nose
 flake8
+yum

@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import hmac
 import lxml.html
+import random
 import re
 import requests
 import time
@@ -12,6 +13,11 @@ import yaml
 import gzip
 import StringIO
 import logging as log
+import sys
+try:
+    import yum
+except ImportError:
+    pass
 
 
 def get_weblisting_uri_list(base_url, suffix=""):
@@ -43,7 +49,7 @@ def get_repodata_uri_list(base_url):
     filelist = filter(lambda x: x.endswith("primary.xml.gz"), uri_list)
     if len(filelist) != 1:
         raise RuntimeError("Couldn't find filelist in %s (%s)" % (
-                            repomd_url, uri_list))
+                           repomd_url, uri_list))
     log.debug("Getting package list: %s%s" % (base_url, filelist[0]))
     resp = requests.get("%s%s" % (base_url, filelist[0]))
     filelist = gzip.GzipFile(fileobj=StringIO.StringIO(resp.content)).read()
@@ -110,6 +116,28 @@ def get_config(filename):
             raise exc
 
 
+def add_enabled_repos(filename, section=None):
+    y = yum.YumBase()
+    rs = y.repos
+    config = get_config(filename)
+    data = config.get(section)
+    if not data:
+        return
+    existing_ids = []
+    for k in config[section]['mirrors']:
+        existing_ids.append(k.get('name'))
+    for r in rs.listEnabled():
+        if r.id in existing_ids:
+            continue
+        config[section]['mirrors'].append(
+            {'url': random.choice(r.urls),
+             'prefix': '%s/' % r.id,
+             'type': 'repodata',
+             'name': r.id})
+    with open(filename, 'wb') as fh:
+        fh.write(yaml.dump(config, default_flow_style=False))
+
+
 def setup_log(args):
     lvl = log.DEBUG if args.debug else log.INFO
     log.basicConfig(format='*** %(levelname)s:\t%(message)s\033[m', level=lvl)
@@ -126,9 +154,20 @@ def main():
         '--update', action='store_true', help="Update objects if they exist \
         but differ in size. Objects are skipped by default if they exist")
 
+    if 'yum' in sys.modules:
+        parser.add_argument(
+            '--add-enabled-repos', help="Add all currently enabled \
+            repositories to the named section in the config file if not yet \
+            existing. Randomly selects one mirror url",
+            metavar='<section name>')
+
     args = parser.parse_args()
     setup_log(args)
     config = get_config(args.filename)
+    if args.add_enabled_repos:
+        add_enabled_repos(args.filename, args.add_enabled_repos)
+        sys.exit(0)
+
     for name, entry in config.items():
         uris = []
         swift_url = entry.get('swift').get('url')
