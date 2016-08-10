@@ -186,7 +186,6 @@ def main():
         sys.exit(0)
 
     for name, entry in config.items():
-        uris = []
         swift_url = entry.get('swift').get('url')
         swift_key = entry.get('swift').get('key')
         swift_ttl = entry.get('swift').get('ttl')
@@ -202,10 +201,10 @@ def main():
 
             if mirror_type == 'repodata':
                 log.info("Getting repodata_uri_list %s" % mirror_url)
-                uris += get_repodata_uri_list(mirror_url)
+                uris = get_repodata_uri_list(mirror_url)
             else:
                 log.info("Getting weblisting_uri_list %s" % mirror_url)
-                uris += get_weblisting_uri_list(mirror_url)
+                uris = get_weblisting_uri_list(mirror_url)
 
             objs = []
             for obj in get_container_list(swift_url, prefix):
