@@ -99,7 +99,8 @@ def force_update(url):
     return force
 
 
-def upload_missing(download_url, swift_url, swift_key, update=False):
+def upload_missing(download_url, swift_url, swift_key,
+                   swift_ttl=False, update=False):
     if update and not force_update(download_url):
         mirror_resp = requests.head(download_url)
         swift_resp = requests.head(swift_url)
@@ -114,7 +115,10 @@ def upload_missing(download_url, swift_url, swift_key, update=False):
         sig, expires = get_tempurl(parsed.path, swift_key)
         tempurl = "%s?temp_url_sig=%s&temp_url_expires=%s" % (
             swift_url, sig, expires)
-        r = requests.put(tempurl, data=resp.content)
+        headers = None
+        if swift_ttl:
+            headers = {'X-Delete-After': swift_ttl}
+        r = requests.put(tempurl, data=resp.content, headers=headers)
         return r.ok
     else:
         log.error("%s: get failed (%s)" % (download_url, str(resp)))
@@ -185,6 +189,7 @@ def main():
         uris = []
         swift_url = entry.get('swift').get('url')
         swift_key = entry.get('swift').get('key')
+        swift_ttl = entry.get('swift').get('ttl')
 
         for mirror in entry.get('mirrors'):
             mirror_name = mirror.get('name')
@@ -226,7 +231,8 @@ def main():
                 download_url = "%s%s" % (mirror_url, m)
                 swift_path = "%s%s%s" % (swift_url, prefix, m)
                 if upload_missing(
-                        download_url, swift_path, swift_key, args.update):
+                        download_url,
+                        swift_path, swift_key, swift_ttl, args.update):
                     print "OK"
                 else:
                     print "Failed"
