@@ -91,8 +91,16 @@ def get_tempurl(path, key):
     return (sig, expires)
 
 
+def force_update(url):
+    # Return True when url shall be updated regardless of its Content-Length
+    force = False
+    if url.endswith('/repodata/repomd.xml'):
+        force = True
+    return force
+
+
 def upload_missing(download_url, swift_url, swift_key, update=False):
-    if update:
+    if update and not force_update(download_url):
         mirror_resp = requests.head(download_url)
         swift_resp = requests.head(swift_url)
         if (mirror_resp.headers.get('Content-Length') ==
@@ -202,6 +210,9 @@ def main():
                 missing = uris
             else:
                 missing = get_missing(uris, objs)
+                for uri in uris:
+                    if force_update(uri) and uri not in missing:
+                        missing.add(uri)
             if not missing:
                 log.info("%s [%s]: is up-to-date (%s%s)" % (
                          name, mirror_name, swift_url, prefix))
