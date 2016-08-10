@@ -179,6 +179,7 @@ def main():
         swift_key = entry.get('swift').get('key')
 
         for mirror in entry.get('mirrors'):
+            mirror_name = mirror.get('name')
             prefix = mirror.get('prefix', '')
             mirror_url = mirror.get('url')
             mirror_type = mirror.get('type')
@@ -202,10 +203,11 @@ def main():
             else:
                 missing = get_missing(uris, objs)
             if not missing:
-                log.info("%s: is up-to-date (%s)" % (name, swift_url))
+                log.info("%s [%s]: is up-to-date (%s%s)" % (
+                         name, mirror_name, swift_url, prefix))
                 continue
-            log.info("Uploading %d missing files for mirror %s (%s)\n" % (
-                     len(missing), name, swift_url))
+            log.info("Uploading %d missing files for mirror %s [%s] (%s%s)" % (
+                     len(missing), name, mirror_name, swift_url, prefix))
             for m in missing:
                 print m + "...",
                 if args.noop:
