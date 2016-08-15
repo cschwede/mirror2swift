@@ -15,6 +15,7 @@ import StringIO
 import logging as log
 import os
 import sys
+import subprocess
 try:
     import yum
 except ImportError:
@@ -115,6 +116,10 @@ def force_update(url):
     force = False
     if url.endswith('/repodata/repomd.xml'):
         force = True
+    for gitfiles in ('info/refs', 'objects/info/packs', 'packed-refs',
+                     'HEAD', 'FETCH_HEAD'):
+        if url.endswith('/%s' % gitfiles):
+            force = True
     return force
 
 
@@ -198,6 +203,12 @@ def add_enabled_repos(filename, section=None):
         fh.write(yaml.dump(config, default_flow_style=False))
 
 
+def execute(argv, cwd=None):
+    p = subprocess.Popen(argv, cwd=cwd)
+    if p.wait():
+        raise RuntimeError("%s: failed (cwd=%s)" % (' '.join(argv), cwd))
+
+
 def setup_log(args):
     lvl = log.DEBUG if args.debug else log.INFO
     log.basicConfig(format='*** %(levelname)s:\t%(message)s\033[m', level=lvl)
@@ -251,6 +262,22 @@ def main():
                 log.info("Direct get %s from %s" % (uris[0], mirror_url))
             elif mirror_type == 'local':
                 log.info("Getting local_files_list %s" % mirror_url)
+                uris = get_local_files_list(mirror_url)
+            elif mirror_type == 'git':
+                cachedir = "%s/.cache/mirror2swift" % os.environ["HOME"]
+                if not os.path.isdir(cachedir):
+                    os.makedirs(cachedir)
+                gitdir = "%s/%s" % (cachedir, mirror_name)
+                if not os.path.isdir(gitdir):
+                    log.info("Cloning %s to %s" % (mirror_url, gitdir))
+                    execute(["git", "clone", "--bare", mirror_url, gitdir])
+                else:
+                    log.info("Updating %s" % mirror_url)
+                    execute(["git", "fetch", "origin",
+                             "+refs/heads/*:refs/heads/*",
+                             "+refs/tags/*:refs/tags/*"], cwd=gitdir)
+                execute(["git", "update-server-info"], cwd=gitdir)
+                mirror_url = "%s/" % gitdir
                 uris = get_local_files_list(mirror_url)
             else:
                 log.info("Getting weblisting_uri_list %s" % mirror_url)
