@@ -13,6 +13,7 @@ import yaml
 import gzip
 import StringIO
 import logging as log
+import os
 import sys
 try:
     import yum
@@ -67,6 +68,24 @@ def get_repodata_uri_list(base_url):
     return uri_list
 
 
+def get_local_files_list(path):
+    files_list = []
+    if not os.path.isdir(path):
+        log.error("%s: not a directory" % path)
+        exit(1)
+    for dirpath, dirnames, files in os.walk(path):
+        if not files:
+            continue
+        local_dir_path = dirpath[len(path):]
+        if not local_dir_path:
+            files_list += files
+        else:
+            files_list += map(lambda x: "%s/%s" % (local_dir_path, x), files)
+    if not files_list:
+        log.error("%s: empty directory" % path)
+    return files_list
+
+
 def get_container_list(url, prefix=None):
     url += "?format=json"
     if prefix:
@@ -99,17 +118,41 @@ def force_update(url):
     return force
 
 
+def local_path(url):
+    if url[:4] != 'http':
+        if os.path.exists(url):
+            return True
+        log.error("%s: local path doesn't exists" % url)
+    return False
+
+
 def upload_missing(download_url, swift_url, swift_key,
                    swift_ttl=False, update=False):
     if update and not force_update(download_url):
-        mirror_resp = requests.head(download_url)
+        if local_path(download_url):
+            class LocalResp:
+                def __init__(self, path):
+                    size = os.stat(download_url).st_size
+                    self.headers = {
+                        'Content-Length': str(size)
+                    }
+            mirror_resp = LocalResp(download_url)
+        else:
+            mirror_resp = requests.head(download_url)
         swift_resp = requests.head(swift_url)
         if (mirror_resp.headers.get('Content-Length') ==
                 swift_resp.headers.get('Content-Length')):
             log.debug("%s: already cached" % download_url)
             return True
     parsed = urlparse.urlparse(swift_url)
-    resp = requests.get(download_url, stream=True)
+    if local_path(download_url):
+        class LocalDownload:
+            def __init__(self, path):
+                self.content = open(path, 'rb')
+                self.ok = True
+        resp = LocalDownload(download_url)
+    else:
+        resp = requests.get(download_url, stream=True)
     if resp.ok:
         log.debug("%s: caching to %s" % (download_url, swift_url))
         sig, expires = get_tempurl(parsed.path, swift_key)
@@ -206,6 +249,9 @@ def main():
                 uris = [mirror_url.split('/')[-2]]
                 mirror_url = "/".join(mirror_url.split('/')[:-2]) + "/"
                 log.info("Direct get %s from %s" % (uris[0], mirror_url))
+            elif mirror_type == 'local':
+                log.info("Getting local_files_list %s" % mirror_url)
+                uris = get_local_files_list(mirror_url)
             else:
                 log.info("Getting weblisting_uri_list %s" % mirror_url)
                 uris = get_weblisting_uri_list(mirror_url)
