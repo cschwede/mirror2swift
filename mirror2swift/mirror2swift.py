@@ -202,6 +202,10 @@ def main():
             if mirror_type == 'repodata':
                 log.info("Getting repodata_uri_list %s" % mirror_url)
                 uris = get_repodata_uri_list(mirror_url)
+            elif mirror_type == 'direct':
+                uris = [mirror_url.split('/')[-2]]
+                mirror_url = "/".join(mirror_url.split('/')[:-2]) + "/"
+                log.info("Direct get %s from %s" % (uris[0], mirror_url))
             else:
                 log.info("Getting weblisting_uri_list %s" % mirror_url)
                 uris = get_weblisting_uri_list(mirror_url)
