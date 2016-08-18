@@ -13,7 +13,9 @@ import yaml
 import gzip
 import StringIO
 import logging as log
+import os
 import sys
+import subprocess
 try:
     import yum
 except ImportError:
@@ -67,6 +69,24 @@ def get_repodata_uri_list(base_url):
     return uri_list
 
 
+def get_local_files_list(path):
+    files_list = []
+    if not os.path.isdir(path):
+        log.error("%s: not a directory" % path)
+        exit(1)
+    for dirpath, dirnames, files in os.walk(path):
+        if not files:
+            continue
+        local_dir_path = dirpath[len(path):]
+        if not local_dir_path:
+            files_list += files
+        else:
+            files_list += map(lambda x: "%s/%s" % (local_dir_path, x), files)
+    if not files_list:
+        log.error("%s: empty directory" % path)
+    return files_list
+
+
 def get_container_list(url, prefix=None):
     url += "?format=json"
     if prefix:
@@ -91,22 +111,62 @@ def get_tempurl(path, key):
     return (sig, expires)
 
 
-def upload_missing(download_url, swift_url, swift_key, update=False):
-    if update:
-        mirror_resp = requests.head(download_url)
+def force_update(url):
+    # Return True when url shall be updated regardless of its Content-Length
+    force = False
+    if url.endswith('/repodata/repomd.xml'):
+        force = True
+    for gitfiles in ('info/refs', 'objects/info/packs', 'packed-refs',
+                     'HEAD', 'FETCH_HEAD'):
+        if url.endswith('/%s' % gitfiles):
+            force = True
+    return force
+
+
+def local_path(url):
+    if url[:4] != 'http':
+        if os.path.exists(url):
+            return True
+        log.error("%s: local path doesn't exists" % url)
+    return False
+
+
+def upload_missing(download_url, swift_url, swift_key,
+                   swift_ttl=False, update=False):
+    if update and not force_update(download_url):
+        if local_path(download_url):
+            class LocalResp:
+                def __init__(self, path):
+                    size = os.stat(download_url).st_size
+                    self.headers = {
+                        'Content-Length': str(size)
+                    }
+            mirror_resp = LocalResp(download_url)
+        else:
+            mirror_resp = requests.head(download_url)
         swift_resp = requests.head(swift_url)
         if (mirror_resp.headers.get('Content-Length') ==
                 swift_resp.headers.get('Content-Length')):
             log.debug("%s: already cached" % download_url)
             return True
     parsed = urlparse.urlparse(swift_url)
-    resp = requests.get(download_url, stream=True)
+    if local_path(download_url):
+        class LocalDownload:
+            def __init__(self, path):
+                self.content = open(path, 'rb')
+                self.ok = True
+        resp = LocalDownload(download_url)
+    else:
+        resp = requests.get(download_url, stream=True)
     if resp.ok:
         log.debug("%s: caching to %s" % (download_url, swift_url))
         sig, expires = get_tempurl(parsed.path, swift_key)
         tempurl = "%s?temp_url_sig=%s&temp_url_expires=%s" % (
             swift_url, sig, expires)
-        r = requests.put(tempurl, data=resp.content)
+        headers = None
+        if swift_ttl:
+            headers = {'X-Delete-After': swift_ttl}
+        r = requests.put(tempurl, data=resp.content, headers=headers)
         return r.ok
     else:
         log.error("%s: get failed (%s)" % (download_url, str(resp)))
@@ -143,6 +203,12 @@ def add_enabled_repos(filename, section=None):
         fh.write(yaml.dump(config, default_flow_style=False))
 
 
+def execute(argv, cwd=None):
+    p = subprocess.Popen(argv, cwd=cwd)
+    if p.wait():
+        raise RuntimeError("%s: failed (cwd=%s)" % (' '.join(argv), cwd))
+
+
 def setup_log(args):
     lvl = log.DEBUG if args.debug else log.INFO
     log.basicConfig(format='*** %(levelname)s:\t%(message)s\033[m', level=lvl)
@@ -174,11 +240,12 @@ def main():
         sys.exit(0)
 
     for name, entry in config.items():
-        uris = []
         swift_url = entry.get('swift').get('url')
         swift_key = entry.get('swift').get('key')
+        swift_ttl = entry.get('swift').get('ttl')
 
         for mirror in entry.get('mirrors'):
+            mirror_name = mirror.get('name')
             prefix = mirror.get('prefix', '')
             mirror_url = mirror.get('url')
             mirror_type = mirror.get('type')
@@ -188,10 +255,33 @@ def main():
 
             if mirror_type == 'repodata':
                 log.info("Getting repodata_uri_list %s" % mirror_url)
-                uris += get_repodata_uri_list(mirror_url)
+                uris = get_repodata_uri_list(mirror_url)
+            elif mirror_type == 'direct':
+                uris = [mirror_url.split('/')[-2]]
+                mirror_url = "/".join(mirror_url.split('/')[:-2]) + "/"
+                log.info("Direct get %s from %s" % (uris[0], mirror_url))
+            elif mirror_type == 'local':
+                log.info("Getting local_files_list %s" % mirror_url)
+                uris = get_local_files_list(mirror_url)
+            elif mirror_type == 'git':
+                cachedir = "%s/.cache/mirror2swift" % os.environ["HOME"]
+                if not os.path.isdir(cachedir):
+                    os.makedirs(cachedir)
+                gitdir = "%s/%s" % (cachedir, mirror_name)
+                if not os.path.isdir(gitdir):
+                    log.info("Cloning %s to %s" % (mirror_url, gitdir))
+                    execute(["git", "clone", "--bare", mirror_url, gitdir])
+                else:
+                    log.info("Updating %s" % mirror_url)
+                    execute(["git", "fetch", "origin",
+                             "+refs/heads/*:refs/heads/*",
+                             "+refs/tags/*:refs/tags/*"], cwd=gitdir)
+                execute(["git", "update-server-info"], cwd=gitdir)
+                mirror_url = "%s/" % gitdir
+                uris = get_local_files_list(mirror_url)
             else:
                 log.info("Getting weblisting_uri_list %s" % mirror_url)
-                uris += get_weblisting_uri_list(mirror_url)
+                uris = get_weblisting_uri_list(mirror_url)
 
             objs = []
             for obj in get_container_list(swift_url, prefix):
@@ -201,11 +291,21 @@ def main():
                 missing = uris
             else:
                 missing = get_missing(uris, objs)
+                for uri in uris:
+                    if force_update(uri) and uri not in missing:
+                        missing.add(uri)
             if not missing:
-                log.info("%s: is up-to-date (%s)" % (name, swift_url))
+                log.info("%s [%s]: is up-to-date (%s%s)" % (
+                         name, mirror_name, swift_url, prefix))
                 continue
-            log.info("Uploading %d missing files for mirror %s (%s)\n" % (
-                     len(missing), name, swift_url))
+            # Make sure repomd.xml file is uploaded at the end
+            missing = list(missing)
+            for index_file in ("repodata/repomd.xml",):
+                if index_file in missing:
+                    missing.remove(index_file)
+                    missing.append(index_file)
+            log.info("Uploading %d missing files for mirror %s [%s] (%s%s)" % (
+                     len(missing), name, mirror_name, swift_url, prefix))
             for m in missing:
                 print m + "...",
                 if args.noop:
@@ -213,7 +313,8 @@ def main():
                 download_url = "%s%s" % (mirror_url, m)
                 swift_path = "%s%s%s" % (swift_url, prefix, m)
                 if upload_missing(
-                        download_url, swift_path, swift_key, args.update):
+                        download_url,
+                        swift_path, swift_key, swift_ttl, args.update):
                     print "OK"
                 else:
                     print "Failed"
