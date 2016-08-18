@@ -298,6 +298,12 @@ def main():
                 log.info("%s [%s]: is up-to-date (%s%s)" % (
                          name, mirror_name, swift_url, prefix))
                 continue
+            # Make sure repomd.xml file is uploaded at the end
+            missing = list(missing)
+            for index_file in ("repodata/repomd.xml",):
+                if index_file in missing:
+                    missing.remove(index_file)
+                    missing.append(index_file)
             log.info("Uploading %d missing files for mirror %s [%s] (%s%s)" % (
                      len(missing), name, mirror_name, swift_url, prefix))
             for m in missing:
