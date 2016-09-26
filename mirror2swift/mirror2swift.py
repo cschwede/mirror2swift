@@ -157,7 +157,7 @@ def upload_missing(download_url, swift_url, swift_key,
                 self.ok = True
         resp = LocalDownload(download_url)
     else:
-        resp = requests.get(download_url, stream=True)
+        resp = requests.get(download_url, stream=True, timeout=30)
     if resp.ok:
         log.debug("%s: caching to %s" % (download_url, swift_url))
         sig, expires = get_tempurl(parsed.path, swift_key)
@@ -312,12 +312,15 @@ def main():
                     continue
                 download_url = "%s%s" % (mirror_url, m)
                 swift_path = "%s%s%s" % (swift_url, prefix, m)
-                if upload_missing(
-                        download_url,
-                        swift_path, swift_key, swift_ttl, args.update):
-                    print "OK"
-                else:
-                    print "Failed"
+                try:
+                    if upload_missing(
+                            download_url,
+                            swift_path, swift_key, swift_ttl, args.update):
+                        print "OK"
+                    else:
+                        print "Failed"
+                except requests.exceptions.Timeout:
+                    print "Failed (timeout)"
 
 
 if __name__ == "__main__":
