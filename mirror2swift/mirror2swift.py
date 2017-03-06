@@ -55,10 +55,9 @@ def get_repodata_uri_list(base_url):
     log.debug("Getting package list: %s%s" % (base_url, filelist[0]))
     resp = requests.get("%s%s" % (base_url, filelist[0]))
 
-    content_type = resp.headers.get('Content-Type', '')
-    if 'gzip' in content_type:
+    try:
         filelist = gzip.GzipFile(fileobj=StringIO.StringIO(resp.content)).read()
-    else:
+    except:
         filelist = resp.content
 
     # Extract packages list
