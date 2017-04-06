@@ -165,7 +165,7 @@ def upload_missing(download_url, swift_url, swift_key,
             swift_url, sig, expires)
         headers = None
         if swift_ttl:
-            headers = {'X-Delete-After': swift_ttl}
+            headers = {'X-Delete-After': str(swift_ttl)}
         r = requests.put(tempurl, data=resp.content, headers=headers)
         return r.ok
     else:
