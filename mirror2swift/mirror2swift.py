@@ -55,10 +55,18 @@ def get_repodata_uri_list(base_url):
     log.debug("Getting package list: %s%s" % (base_url, filelist[0]))
     resp = requests.get("%s%s" % (base_url, filelist[0]))
 
-    content_type = resp.headers.get('Content-Type', '')
-    if 'gzip' in content_type:
+#    content_type = resp.headers.get('Content-Type', '')
+#    log.debug("Reported Content-Type for filelist file: %s" % content_type)
+#    This seems to not be really solid - seen an issue where remote reported
+#    application/xml but returned a gzipped content
+#    if 'gzip' in content_type:
+#        filelist = gzip.GzipFile(fileobj=StringIO.StringIO(resp.content)).read()
+#    else:
+#        filelist = resp.content
+    try:
         filelist = gzip.GzipFile(fileobj=StringIO.StringIO(resp.content)).read()
-    else:
+    except IOError:
+        log.debug("Filelist file is not gzipped - use it as it is.")
         filelist = resp.content
 
     # Extract packages list

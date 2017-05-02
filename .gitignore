@@ -1,1 +1,4 @@
 config.yaml
+.tox
+*.py[co]
+*.egg-info
